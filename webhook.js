@@ -1,8 +1,10 @@
+require('./config.js');
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
 const fs = require('fs');
 const { readOrders, writeOrders } = require('./trashbase/lib/database.js');
+const { devorsix } = require('./index.js');
 
 const app = express();
 app.use(bodyParser.json());
@@ -15,35 +17,37 @@ app.post('/webhook/midtrans', async (req, res) => {
         const { order_id, transaction_status } = notification;
 
         if (transaction_status !== 'settlement') {
+            console.log(`[Webhook] Status transaksi bukan settlement: ${transaction_status}`);
             return res.status(200).send('Not settled. Ignored.');
         }
 
         console.log(`[Webhook] Pembayaran sukses untuk Order ID: ${order_id}`);
 
+        // Baca data orders
         const orders = readOrders();
         const orderIndex = orders.findIndex(o => o.order_id === order_id);
 
         if (orderIndex === -1) {
-            console.error(`[Webhook] Order ID ${order_id} tidak ditemukan.`);
-            return res.status(404).send('Order tidak ditemukan.');
+            console.warn(`[Webhook] Order ID ${order_id} tidak ditemukan. Tapi dibalas OK supaya Midtrans gak error.`);
+            return res.status(200).send('OK (Order tidak ditemukan)');
         }
 
         const order = orders[orderIndex];
 
+        // Periksa apakah order sudah diproses
         if (order.status === 'success') {
             console.log(`[Webhook] Order ID ${order_id} sudah diproses sebelumnya.`);
             return res.status(200).send('Order sudah diproses.');
         }
 
+        // Periksa apakah ada perintah untuk dijalankan
         if (!order.command) {
             console.log(`[Webhook] Order ID ${order_id} tidak memiliki perintah untuk dijalankan.`);
-            orders[orderIndex].status = 'success';
-            writeOrders(orders);
             return res.status(200).send('Tidak ada perintah untuk dijalankan.');
         }
 
         // Kirim perintah ke Pterodactyl
-        const pterodactylApiUrl = `https://${global.pterodactylApiUrl}/api/client/servers/${global.serverId}/command`;
+        const pterodactylApiUrl = `${global.pterodactylApiUrl}/api/client/servers/${global.serverId}/command`;
         const pterodactylApiKey = global.pterodactylApiKey;
 
         const response = await axios.post(
@@ -57,10 +61,10 @@ app.post('/webhook/midtrans', async (req, res) => {
             }
         );
 
-        console.log(`[Webhook] Perintah berhasil dikirim ke Pterodactyl untuk Order ID ${order_id}`);
-        orders[orderIndex].status = 'success';
+        order.status = 'success';
         writeOrders(orders);
 
+        console.log(`[Webhook] Perintah berhasil dikirim ke Pterodactyl untuk Order ID ${order_id}`);
         res.status(200).send('OK');
     } catch (error) {
         console.error('[Webhook] Terjadi kesalahan:', error);

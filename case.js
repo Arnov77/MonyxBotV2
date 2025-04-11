@@ -90,8 +90,9 @@ const util = require('util')
 const { spawn: spawn, exec } = require("child_process")
 const utils = require("minecraft-server-util")
 const mc = require('./mcconfig.js')
-const { readGroupSetting, readToxicWords, toxicWordsPath, writeGroupSetting, readProducts, writeProducts } = require('./trashbase/lib/database.js');
-const { createMidtransTransaction } = require('./trashbase/lib/midtrans');
+const { readGroupSetting, readToxicWords, toxicWordsPath, writeGroupSetting, readProducts, writeProducts, readOrders, writeOrders } = require('./trashbase/lib/database.js');
+const { createMidtransTransaction, cancelMidtransTransaction, checkMidtransTransaction } = require('./trashbase/lib/midtrans');
+const { isPlayerInServer } = require('./trashbase/lib/validation');
 
 const onlyAdmin = global.onlyAdmin
 const onlyOwner = global.onlyOwner
@@ -1381,12 +1382,28 @@ break;
 
 case 'buy': {
     if (!q) {
-        return xreply(`⚠️ Kirim perintah dengan format: ${prefix}buy <nama_produk>|<username_minecraft>|<email>`);
+        if (global.paymentMethod === 'gateway') {
+            return xreply(`⚠️ Kirim perintah dengan format: ${prefix}buy <nama_produk>|<username_minecraft>|<email>\n\nContoh: ${prefix}buy VIP Rank|Steve|steve@example.com`);
+        } else if (global.paymentMethod === 'manual') {
+            return xreply(`⚠️ Kirim perintah dengan format: ${prefix}buy <nama_produk>\n\nContoh: ${prefix}buy VIP Rank`);
+        }
     }
 
     const [productName, usernameMinecraft, email] = q.split('|').map(item => item.trim());
     if (!productName) {
-        return xreply(`⚠️ Anda harus menyebutkan nama produk. Contoh: ${prefix}buy <nama_produk>|<username_minecraft>|<email>`);
+        return xreply(`⚠️ Anda harus menyebutkan nama produk. Contoh: ${prefix}buy <nama_produk>${global.paymentMethod === 'gateway' ? '|<username_minecraft>|<email>' : ''}`);
+    }
+
+	const orders = readOrders();
+
+    // Validasi: Cek apakah pengguna sudah memiliki order dengan status pending
+    const hasPendingOrder = orders.some(order => 
+        order.status === 'pending' && 
+        order.whatsappNumber === senderNumber // Pastikan order milik pengguna ini
+    );
+
+    if (hasPendingOrder) {
+        return xreply('⚠️ Anda sudah memiliki order yang sedang diproses. Harap selesaikan atau batalkan order tersebut sebelum membuat order baru.');
     }
 
     const products = readProducts();
@@ -1396,8 +1413,8 @@ case 'buy': {
         return xreply(`⚠️ Produk "${productName}" tidak ditemukan. Ketik *${prefix}store* untuk melihat daftar produk.`);
     }
 
-    // Jika metode pembayaran adalah gateway, validasi username Minecraft dan email
     if (global.paymentMethod === 'gateway') {
+        // Validasi username dan email
         if (!usernameMinecraft || !email) {
             return xreply(`⚠️ Anda harus menyebutkan username Minecraft dan email. Contoh: ${prefix}buy <nama_produk>|<username_minecraft>|<email>`);
         }
@@ -1408,16 +1425,28 @@ case 'buy': {
             return xreply('⚠️ Format email tidak valid. Harap masukkan email yang benar.');
         }
 
+        // Validasi username Minecraft
+        try {
+            const isPlayerValid = await isPlayerInServer(usernameMinecraft);
+            if (!isPlayerValid) {
+                return xreply(`⚠️ Username "${usernameMinecraft}" belum pernah masuk ke server. Pastikan Anda sudah masuk ke server sebelum membeli.`);
+            }
+        } catch (error) {
+            console.error('Error saat memvalidasi username:', error);
+            return xreply('⚠️ Terjadi kesalahan saat memvalidasi username. Coba lagi nanti.');
+        }
+
         try {
             // Buat transaksi Midtrans
-            const paymentLink = await createMidtransTransaction(product, usernameMinecraft, email);
+            const paymentLink = await createMidtransTransaction(product, usernameMinecraft, email, senderNumber);
 
-            // Kirim link pembayaran ke pengguna
+            // Kirim pesan untuk metode pembayaran gateway
             await devorsix.sendMessage(m.chat, {
-                text: `🛒 *Pembelian Produk*\n\n📌 *Produk:* ${product.name}\n💰 *Harga:* Rp${product.price}\n👤 *Username Minecraft:* ${usernameMinecraft}\n📧 *Email:* ${email}\n\nKlik tombol di bawah untuk melakukan pembayaran melalui Midtrans.`,
+                text: `🛒 *Pembelian Produk*\n\n📌 *Produk:* ${product.name}\n💰 *Harga:* Rp${product.price}\n👤 *Username Minecraft:* ${usernameMinecraft}\n📧 *Email:* ${email}\n\nDengan melanjutkan pembayaran, Anda menyetujui *[Terms of Service](https://example.com/tos)*.\n\nKlik tombol di bawah untuk melakukan pembayaran melalui Midtrans.`,
                 footer: 'Monyx Bot - Store',
                 buttons: [
-                    { buttonId: `.pay ${paymentLink}`, buttonText: { displayText: 'Bayar Sekarang' }, type: 1 }
+                    { buttonId: `.pay ${paymentLink}`, buttonText: { displayText: 'Bayar Sekarang' }, type: 1 },
+                    { buttonId: `.cancel ${productName}`, buttonText: { displayText: 'Batal Order' }, type: 1 }
                 ],
                 headerType: 1
             }, { quoted: m });
@@ -1426,10 +1455,13 @@ case 'buy': {
             xreply('⚠️ Terjadi kesalahan saat membuat transaksi. Coba lagi nanti.');
         }
     } else if (global.paymentMethod === 'manual') {
-        // Jika metode pembayaran manual, tidak perlu username Minecraft dan email
+        // Kirim pesan untuk metode pembayaran manual
         await devorsix.sendMessage(m.chat, {
-            text: `🛒 *Pembelian Produk*\n\n📌 *Produk:* ${product.name}\n💰 *Harga:* Rp${product.price}\n\n${global.manualPaymentInstructions}`,
+            text: `🛒 *Pembelian Produk*\n\n📌 *Produk:* ${product.name}\n💰 *Harga:* Rp${product.price}\n\nDengan melanjutkan pembayaran, Anda menyetujui *[Terms of Service](https://example.com/tos)*.\n\n${global.manualPaymentInstructions}`,
             footer: 'Monyx Bot - Store',
+            buttons: [
+                { buttonId: `.cancel ${productName}`, buttonText: { displayText: 'Batal Order' }, type: 1 }
+            ],
             headerType: 1
         }, { quoted: m });
     } else {
@@ -1438,15 +1470,74 @@ case 'buy': {
 }
 break;
 
-case 'setpayment': {
-    if (!isOwner) return xreply(onlyOwner);
-    if (!q || !['gateway', 'manual'].includes(q.toLowerCase())) {
-        return xreply('⚠️ Format salah. Gunakan perintah:\n- *.setpayment gateway* untuk menggunakan payment gateway\n- *.setpayment manual* untuk menggunakan pembayaran manual.');
+case 'pay': {
+    if (!q) {
+        return xreply('⚠️ Tidak ada link pembayaran yang diberikan. Silakan coba lagi.');
     }
 
-    // Perbarui metode pembayaran
-    global.paymentMethod = q.toLowerCase();
-    xreply(`✅ Metode pembayaran berhasil diubah menjadi *${q.toLowerCase()}*.`);
+    // Validasi apakah link pembayaran valid
+    if (!q.startsWith('http')) {
+        return xreply('⚠️ Link pembayaran tidak valid. Silakan coba lagi.');
+    }
+
+    // Kirim pesan dengan link pembayaran
+    await devorsix.sendMessage(m.chat, {
+        text: `🛒 *Pembayaran Produk*\n\nKlik link berikut untuk melakukan pembayaran:\n\n${q}\n\nSetelah pembayaran selesai, status akan diperbarui secara otomatis.`,
+        footer: 'Monyx Bot - Store',
+        headerType: 1
+    }, { quoted: m });
+}
+break;
+
+case 'cancel': {
+    if (!q) {
+        return xreply('⚠️ Anda harus menyebutkan nama produk yang ingin dibatalkan. Contoh: .cancel VIP Rank');
+    }
+
+    const orders = readOrders();
+    const orderIndex = orders.findIndex(order => 
+        order.product.toLowerCase() === q.toLowerCase() && 
+        order.status === 'pending' && 
+        order.whatsappNumber === senderNumber
+    );
+
+    if (orderIndex === -1) {
+        return xreply(`⚠️ Tidak ada order dengan nama produk "${q}" yang sedang diproses untuk Anda.`);
+    }
+
+    const order = orders[orderIndex];
+
+    // Periksa apakah transaksi benar-benar ada di Midtrans
+    let midtransStatus = null;
+    if (order.order_id) {
+        try {
+            midtransStatus = await checkMidtransTransaction(order.order_id);
+        } catch (error) {
+            console.error('Error saat memeriksa status transaksi di Midtrans:', error);
+            return xreply('⚠️ Terjadi kesalahan saat memeriksa status transaksi. Coba lagi nanti.');
+        }
+    }
+
+    if (!midtransStatus) {
+        // Jika transaksi tidak ada di Midtrans, cukup ubah status di database
+        orders[orderIndex].status = 'cancelled';
+        writeOrders(orders);
+        return xreply(`✅ Order untuk produk "${q}" telah dibatalkan.`);
+    }
+
+    // Jika transaksi ada di Midtrans, batalkan transaksi
+    try {
+        await cancelMidtransTransaction(order.order_id);
+    } catch (error) {
+        console.error('Error saat membatalkan transaksi di Midtrans:', error);
+        return xreply('⚠️ Gagal membatalkan transaksi di Midtrans. Coba lagi nanti.');
+    }
+
+    // Tandai order sebagai dibatalkan
+    orders[orderIndex].status = 'cancelled';
+    writeOrders(orders);
+
+    xreply(`✅ Order untuk produk "${q}" telah dibatalkan.`);
 }
 break;
 
