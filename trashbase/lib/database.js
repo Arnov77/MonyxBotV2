@@ -3,6 +3,7 @@ const path = require('path');
 const groupSettingPath = path.join(__dirname, '../database', 'groupSetting.json');
 const toxicWordsPath = path.join(__dirname, '../database', 'toxicWords.json');
 const productsPath = path.join(__dirname, '../database', 'products.json');
+const ordersPath = path.join(__dirname, '../database', 'orders.json');
 
 // Membaca data dari groupSetting.json
 const readGroupSetting = () => {
@@ -60,6 +61,24 @@ const writeProducts = (products) => {
     }
 };
 
+// Membaca data dari orders.json
+const readOrders = () => {
+    if (!fs.existsSync(ordersPath)) {
+        fs.writeFileSync(ordersPath, JSON.stringify([])); // Inisialisasi file jika belum ada
+    }
+    return JSON.parse(fs.readFileSync(ordersPath, 'utf-8'));
+};
+
+// Menulis data ke orders.json
+const writeOrders = (orders) => {
+    try {
+        fs.writeFileSync(ordersPath, JSON.stringify(orders, null, 2));
+        console.log('Data order berhasil disimpan ke orders.json');
+    } catch (error) {
+        console.error('Gagal menyimpan data ke orders.json:', error);
+    }
+};
+
 module.exports = {
     readGroupSetting,
     readToxicWords,
@@ -67,5 +86,8 @@ module.exports = {
     writeGroupSetting,
     readProducts,
     writeProducts,
-    productsPath
+    productsPath,
+    readOrders,
+    writeOrders,
+    ordersPath
 };
