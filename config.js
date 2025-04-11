@@ -13,13 +13,13 @@ global.onlyBotAdmin = '⚠️ Bot harus menjadi admin untuk menggunakan perintah
 global.onlyOwner = '⚠️ Perintah ini hanya bisa digunakan oleh owner bot!'
 
 //------[Store]------
-global.paymentMethod = 'gateway' // Default: 'manual'. Pilihan: 'gateway' atau 'manual'
+global.paymentMethod = 'manual' // Default: 'manual'. Pilihan: 'gateway' atau 'manual'
 global.manualPaymentInstructions = 'Silakan transfer ke rekening berikut:\n\nBank: XYZ\nNomor Rekening: 123456789\nAtas Nama: John Doe\n\nSetelah transfer, kirim bukti pembayaran ke admin dan sebutkan item dan username minecraft kamu.'
 global.midtrans = {
-    serverKey: 'SB-Mid-server-3sI7ohfNHodPc8oGeq_16WH4', // Ganti dengan Server Key Midtrans Anda
-    clientKey: 'SB-Mid-client-JsstESJoSZhYvCn9', // Ganti dengan Client Key Midtrans Anda
+    serverKey: 'MIDTRANS_SERVER_KEY', // Ganti dengan Server Key Midtrans Anda
+    clientKey: 'MIDTRANS_CLIENT_KEY', // Ganti dengan Client Key Midtrans Anda
     isProduction: false // Ubah ke true jika menggunakan mode produksi
 };
-global.pterodactylApiUrl = 'https://ptero.monyxnetwork.xyz' // URL Pterodactyl 
-global.pterodactylApiKey = "ptlc_u54u7BbRnh9MBsUTmPbzNLB2bwOm2zOvo5h213p7VuN"
+global.pterodactylApiUrl = 'PTERODACTYL_URL' // URL Pterodactyl 
+global.pterodactylApiKey = "PTERODACTYL_API_KEY"
 global.serverId = '0a6318d6' // ID Server Pterodactyl
