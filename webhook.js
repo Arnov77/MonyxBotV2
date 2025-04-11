@@ -1,59 +1,80 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
-const { readProducts } = require('./trashbase/lib/database.js'); // Pastikan fungsi ini tersedia
+const fs = require('fs');
+const { readOrders, writeOrders } = require('./trashbase/lib/database.js');
 
 const app = express();
 app.use(bodyParser.json());
 
-// Endpoint webhook Midtrans
+// Webhook Midtrans
 app.post('/webhook/midtrans', async (req, res) => {
     const notification = req.body;
 
     try {
-        // Validasi notifikasi dari Midtrans
         const { order_id, transaction_status } = notification;
 
-        if (transaction_status === 'settlement') {
-            console.log(`Pembayaran berhasil untuk Order ID: ${order_id}`);
-
-            // Cari produk berdasarkan order_id
-            const products = readProducts();
-            const product = products.find(p => `order-${p.name.toLowerCase().replace(/\s+/g, '-')}` === order_id);
-
-            if (!product) {
-                console.error(`Produk untuk Order ID ${order_id} tidak ditemukan.`);
-                return res.status(404).send('Produk tidak ditemukan.');
-            }
-
-            // Periksa apakah produk memiliki perintah Pterodactyl
-            if (!product.pterodactylCommand) {
-                console.log(`Produk "${product.name}" tidak memiliki perintah Pterodactyl.`);
-                return res.status(200).send('Produk tidak memiliki perintah Pterodactyl.');
-            }
-
-            // Kirim perintah ke Pterodactyl
-            const command = product.pterodactylCommand; // Ambil perintah dari database
-            const pterodactylApiUrl = 'https://your-pterodactyl-panel.com/api/client/servers/<server-id>/command';
-            const pterodactylApiKey = 'YOUR_PTERODACTYL_API_KEY'; // Ganti dengan API Key Pterodactyl Anda
-
-            const response = await axios.post(
-                pterodactylApiUrl,
-                { command },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${pterodactylApiKey}`,
-                        'Content-Type': 'application/json'
-                    }
-                }
-            );
-
-            console.log(`Perintah berhasil dikirim ke Pterodactyl: ${response.data}`);
+        if (transaction_status !== 'settlement') {
+            return res.status(200).send('Not settled. Ignored.');
         }
+
+        console.log(`[Webhook] Pembayaran sukses untuk Order ID: ${order_id}`);
+
+        const orders = readOrders();
+        const orderIndex = orders.findIndex(o => o.order_id === order_id);
+
+        if (orderIndex === -1) {
+            console.error(`[Webhook] Order ID ${order_id} tidak ditemukan.`);
+            return res.status(404).send('Order tidak ditemukan.');
+        }
+
+        const order = orders[orderIndex];
+
+        if (order.status === 'success') {
+            console.log(`[Webhook] Order ID ${order_id} sudah diproses sebelumnya.`);
+            return res.status(200).send('Order sudah diproses.');
+        }
+
+        if (!order.command) {
+            console.log(`[Webhook] Order ID ${order_id} tidak memiliki perintah untuk dijalankan.`);
+            orders[orderIndex].status = 'success';
+            writeOrders(orders);
+            return res.status(200).send('Tidak ada perintah untuk dijalankan.');
+        }
+
+        // Kirim perintah ke Pterodactyl
+        const pterodactylApiUrl = `https://${global.pterodactylApiUrl}/api/client/servers/${global.serverId}/command`;
+        const pterodactylApiKey = global.pterodactylApiKey;
+
+        const response = await axios.post(
+            pterodactylApiUrl,
+            { command: order.command },
+            {
+                headers: {
+                    'Authorization': `Bearer ${pterodactylApiKey}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        console.log(`[Webhook] Perintah berhasil dikirim ke Pterodactyl untuk Order ID ${order_id}`);
+        orders[orderIndex].status = 'success';
+        writeOrders(orders);
 
         res.status(200).send('OK');
     } catch (error) {
-        console.error('Error pada webhook Midtrans:', error);
+        console.error('[Webhook] Terjadi kesalahan:', error);
         res.status(500).send('Internal Server Error');
     }
+});
+
+// Opsional: health check
+app.get('/webhook/test', (req, res) => {
+    res.send('Webhook OK');
+});
+
+// Menjalankan server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Webhook server listening on port ${PORT}`);
 });
